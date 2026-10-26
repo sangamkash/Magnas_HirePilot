@@ -1,0 +1,18 @@
+CREATE EXTENSION IF NOT EXISTS ltree;
+
+CREATE TABLE teams (
+    id SERIAL PRIMARY KEY,
+    hr_id BIGINT NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
+    organization_id BIGINT NOT NULL,
+    parent_id BIGINT,
+    path LTREE NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    FOREIGN KEY (parent_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_teams_hr_id ON teams (hr_id);
+CREATE INDEX IF NOT EXISTS idx_teams_name ON teams (name);
+CREATE INDEX IF NOT EXISTS idx_teams_path ON teams USING GIST (path);

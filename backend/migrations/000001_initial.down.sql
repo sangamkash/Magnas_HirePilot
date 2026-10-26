@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS search_work_modes;
+DROP TABLE IF EXISTS search_technologies;
+DROP TABLE IF EXISTS search_job_titles;
+DROP TABLE IF EXISTS search_configs;
+DROP TABLE IF EXISTS awards;
+DROP TABLE IF EXISTS certificates;
+DROP TABLE IF EXISTS profile_languages;
+DROP TABLE IF EXISTS work_experience;
+DROP TABLE IF EXISTS education;
+DROP TABLE IF EXISTS profile_skills;
+DROP TABLE IF EXISTS profiles;
+DROP TABLE IF EXISTS users;
