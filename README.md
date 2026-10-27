@@ -2,6 +2,17 @@
 
 Magnas Hiring Pilot currently includes a Vite/React frontend and a Go backend foundation. The frontend profile and job search UI still saves data in browser `localStorage`; no frontend API client or connected job provider is present yet.
 
+## Run the full stack
+
+Build and start PostgreSQL, the backend, and the frontend with one command:
+
+```sh
+docker compose up --build -d
+```
+
+Open the frontend at `http://localhost:3000`. The backend is available at `http://localhost:8080`.
+Stop the services with `docker compose down`.
+
 ## Frontend development
 
 ```sh
@@ -14,7 +25,7 @@ npm run build
 
 Requirements: Docker Compose. The Compose setup runs the Go backend and PostgreSQL; migrations run as an explicit one-off command using the same backend image and Go executable.
 
-Start PostgreSQL and the backend:
+Start PostgreSQL and the backend (or use the full-stack command above):
 
 ```sh
 docker compose up --build -d
