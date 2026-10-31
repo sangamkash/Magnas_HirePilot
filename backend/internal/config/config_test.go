@@ -8,6 +8,7 @@ func TestLoadFromPostgresEnvironment(t *testing.T) {
 	for key, value := range map[string]string{
 		"DATABASE_URL": "", "PGHOST": "localhost", "PGPORT": "5432", "PGDATABASE": "hirepilot",
 		"PGUSER": "local-user", "PGPASSWORD": "p@ss word", "PGSSLMODE": "disable", "HTTP_ADDR": "127.0.0.1:8081",
+		"AUTH_SECRET": "01234567890123456789012345678901", "COOKIE_SECURE": "true",
 	} {
 		t.Setenv(key, value)
 	}
@@ -21,10 +22,13 @@ func TestLoadFromPostgresEnvironment(t *testing.T) {
 	if cfg.DatabaseURL != "postgres://local-user:p%40ss%20word@localhost:5432/hirepilot?sslmode=disable" {
 		t.Fatalf("unexpected URL encoding: %q", cfg.DatabaseURL)
 	}
+	if cfg.AuthSecret != "01234567890123456789012345678901" || !cfg.CookieSecure {
+		t.Fatalf("auth settings not loaded: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsMissingDatabaseSettings(t *testing.T) {
-	for _, key := range []string{"DATABASE_URL", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT", "PGSSLMODE", "HTTP_ADDR"} {
+	for _, key := range []string{"DATABASE_URL", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT", "PGSSLMODE", "HTTP_ADDR", "AUTH_SECRET", "COOKIE_SECURE"} {
 		t.Setenv(key, "")
 	}
 	if _, err := Load(); err == nil {

@@ -51,7 +51,7 @@ func runServer(_ *cobra.Command, _ []string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           handler.New(db),
+		Handler:           handler.NewAuth(db, cfg.AuthSecret, cfg.CookieSecure),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

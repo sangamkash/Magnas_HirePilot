@@ -14,6 +14,8 @@ type Config struct {
 	HTTPAddr      string
 	DatabaseURL   string
 	MigrationsDir string
+	AuthSecret    string
+	CookieSecure  bool
 }
 
 func Load() (Config, error) {
@@ -29,7 +31,22 @@ func Load() (Config, error) {
 	if migrationsDir == "" {
 		migrationsDir = "migrations"
 	}
-	return Config{HTTPAddr: addr, DatabaseURL: databaseURL, MigrationsDir: migrationsDir}, nil
+	authSecret := os.Getenv("AUTH_SECRET")
+	if len(authSecret) < 32 {
+		return Config{}, errors.New("AUTH_SECRET must contain at least 32 characters")
+	}
+	cookieSecure, err := strconv.ParseBool(envOrDefault("COOKIE_SECURE", "false"))
+	if err != nil {
+		return Config{}, errors.New("COOKIE_SECURE must be true or false")
+	}
+	return Config{HTTPAddr: addr, DatabaseURL: databaseURL, MigrationsDir: migrationsDir, AuthSecret: authSecret, CookieSecure: cookieSecure}, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func postgresURL() (string, error) {
