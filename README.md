@@ -1,6 +1,6 @@
 # Magnas Hiring Pilot
 
-Magnas Hiring Pilot currently includes a Vite/React frontend and a Go backend foundation. The frontend profile and job search UI still saves data in browser `localStorage`; no frontend API client or connected job provider is present yet.
+Magnas Hiring Pilot currently includes a Vite/React frontend and a Go backend foundation. Profile records are stored in PostgreSQL through authenticated APIs. The frontend keeps job search configuration embedded in profile JSONB; job discovery providers are not connected yet.
 
 ## Run the full stack
 
@@ -53,6 +53,8 @@ curl -i http://localhost:8080/ready
 `GET /health` reports HTTP process health. `GET /ready` checks PostgreSQL connectivity and returns `503` until PostgreSQL is reachable; apply migrations before expecting readiness to succeed. Neither endpoint exposes database errors.
 
 The database uses a named Docker volume and keeps its data across restarts. Stop the services with `make down`; this does not remove the volume.
+
+Profile management uses authenticated `GET/POST /api/v1/profiles`, `GET/PUT/DELETE /api/v1/profiles/{id}`, `PUT /api/v1/profiles/{id}/activate`, and `GET /api/v1/profiles/active` endpoints. Migration `000004_profile_management` backfills existing relational profile and search data into JSONB, and profile writes transactionally keep the relational representation synchronized. The backend checks that the required profile schema exists before serving. Existing browser profile data is imported with per-profile idempotency keys and remains in localStorage until every profile is confirmed. Migration 000004 is forward-only after profile data, imports, active selections, or multiple profiles exist; review its guarded down migration before considering rollback.
 
 Migrations are kept in `backend/migrations` and are not run automatically by the application or Docker startup. Create an empty up/down pair with `make migrate create name=add_candidate_notes`; edit the generated files before applying them. Files use `NNNNNN_name.up.sql` and `NNNNNN_name.down.sql`; versions run in ascending order and rollback in descending order. Normal SQL and its tracking update run in a transaction. For PostgreSQL statements that cannot run in a transaction, put `-- migrate:no-transaction` in the SQL file; the SQL then executes without an encompassing transaction and migration bookkeeping follows separately, so such migrations should be written to tolerate recovery after partial execution.
 

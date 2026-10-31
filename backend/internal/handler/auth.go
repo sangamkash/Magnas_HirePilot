@@ -58,6 +58,7 @@ func NewAuth(db *pgxpool.Pool, secret string, secure bool) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", h.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", h.logout)
 	mux.Handle("GET /api/v1/auth/me", h.requireAuth(http.HandlerFunc(h.me)))
+	(&profileHandler{db: db}).routes(mux, h.requireAuth)
 	mux.Handle("/api/", h.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { writeError(w, http.StatusNotFound, "Not found.") })))
 	return mux
 }

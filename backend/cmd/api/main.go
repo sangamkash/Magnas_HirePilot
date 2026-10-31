@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/magnas/hirepilot/internal/config"
 	"github.com/magnas/hirepilot/internal/database"
 	"github.com/magnas/hirepilot/internal/handler"
@@ -48,6 +49,11 @@ func runServer(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	defer db.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := waitForProfileSchema(ctx, db, logger); err != nil {
+		return err
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -58,8 +64,6 @@ func runServer(_ *cobra.Command, _ []string) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -75,6 +79,30 @@ func runServer(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+func waitForProfileSchema(ctx context.Context, db *pgxpool.Pool, logger *slog.Logger) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	loggedWaiting := false
+	for {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		var profileColumns int
+		err := db.QueryRow(checkCtx, `SELECT count(*) FROM information_schema.columns WHERE (table_schema,table_name,column_name) IN (('public','profiles','profile_data'),('public','profiles','legacy_import_id'),('public','users','active_profile_id'))`).Scan(&profileColumns)
+		cancel()
+		if err == nil && profileColumns == 3 {
+			return nil
+		}
+		if !loggedWaiting {
+			logger.Warn("waiting for profile schema migration; run the migrate up command when PostgreSQL is ready")
+			loggedWaiting = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func newMigrateCommand() *cobra.Command {
