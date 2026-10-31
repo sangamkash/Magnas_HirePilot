@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 const authCookie = "hirepilot_session"
 const sessionLifetime = 12 * time.Hour
+const maxJSONBodyBytes = 1 << 20 // 1 MiB; profiles may contain substantial nested career history.
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
 
@@ -180,19 +182,50 @@ func (h *authHandler) parseToken(value string) (string, bool) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body.")
+		message := "Request body contains invalid JSON. Check the syntax and try again."
+		var typeErr *json.UnmarshalTypeError
+		var syntaxErr *json.SyntaxError
+		switch {
+		case errors.As(err, &typeErr):
+			message = "Invalid value for " + requestFieldName(typeErr.Field) + ": expected " + typeErr.Type.String() + "."
+		case errors.As(err, &syntaxErr):
+			message = "Request body contains invalid JSON near character " + formatOffset(syntaxErr.Offset) + "."
+		case errors.Is(err, io.EOF):
+			message = "Request body is empty. Provide a JSON object."
+		case strings.Contains(err.Error(), "unknown field"):
+			message = "Request body contains an unsupported field. Check the field names and try again."
+		case strings.Contains(err.Error(), "request body too large"):
+			message = "Request body is too large."
+		}
+		writeError(w, http.StatusBadRequest, message)
 		return false
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "Invalid request body.")
+		message := "Request body must contain exactly one JSON value."
+		if err != nil {
+			message = "Request body contains invalid JSON after the first value."
+		}
+		writeError(w, http.StatusBadRequest, message)
 		return false
 	}
 	return true
 }
+func requestFieldName(field string) string {
+	if field == "" {
+		return "request body"
+	}
+	parts := strings.Split(field, ".")
+	return parts[len(parts)-1]
+}
+
+func formatOffset(offset int64) string {
+	return strconv.FormatInt(offset, 10)
+}
+
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }

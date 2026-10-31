@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,5 +61,49 @@ func TestProtectedAPIRequiresValidSession(t *testing.T) {
 	protected.ServeHTTP(authenticated, request)
 	if authenticated.Code != http.StatusNoContent {
 		t.Fatalf("authenticated status = %d", authenticated.Code)
+	}
+}
+
+func TestDecodeJSONReturnsActionableErrors(t *testing.T) {
+	tests := []struct{ name, body, want string }{
+		{"wrong field type", `{"username":42,"password":"long-enough-password"}`, "Invalid value for username: expected string."},
+		{"unknown field", `{"usernmae":"person","password":"long-enough-password"}`, "unsupported field"},
+		{"malformed JSON", `{"username":`, "invalid JSON"},
+		{"trailing value", `{"username":"person","password":"long-enough-password"} {}`, "exactly one JSON value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
+			if decodeJSON(r, request, &credentials{}) {
+				t.Fatal("expected request rejection")
+			}
+			if !strings.Contains(r.Body.String(), tt.want) {
+				t.Fatalf("response %q does not contain %q", r.Body.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeJSONAcceptsProfileSizedPayload(t *testing.T) {
+	// Simulate a profile with enough description text to exceed the old 4 KiB cap.
+	body, err := json.Marshal(map[string]any{
+		"name": "Backend Engineer",
+		"data": map[string]any{
+			"personal":   map[string]string{"name": "Test User"},
+			"experience": []map[string]string{{"description": strings.Repeat("career detail ", 500)}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) <= 4096 {
+		t.Fatalf("test payload should exceed old 4 KiB limit, got %d bytes", len(body))
+	}
+	var decoded map[string]any
+	r := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/profiles", strings.NewReader(string(body)))
+	if !decodeJSON(r, request, &decoded) {
+		t.Fatalf("profile-sized payload rejected: %s", r.Body.String())
 	}
 }
