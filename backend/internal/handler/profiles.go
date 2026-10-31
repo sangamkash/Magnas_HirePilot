@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -103,11 +105,11 @@ func (h *profileHandler) collection(w http.ResponseWriter, r *http.Request) {
 		p.Summary = profileSummary(p.Data)
 		err = tx.QueryRow(r.Context(), `INSERT INTO profiles(user_id,name,target_role,profile_data,legacy_import_id,full_name,email,phone,location,headline,summary) VALUES($1,$2,$3,$4::jsonb,NULLIF($5,''),$6,$7,$8,$9,$10,$11) RETURNING id::text`, uid, p.Name, p.TargetRole, string(p.Data), p.LegacyImportID, personal(p.Data, "name"), personal(p.Data, "email"), personal(p.Data, "phone"), personal(p.Data, "location"), personal(p.Data, "headline"), p.Summary).Scan(&p.ID)
 		if err != nil {
-			writeError(w, 400, "Unable to save profile.")
+			writeProfilePersistenceError(w, "save", err)
 			return
 		}
 		if err = h.syncRelational(r.Context(), tx, p.ID, p.Data); err != nil {
-			writeError(w, 400, "Unable to save profile.")
+			writeProfilePersistenceError(w, "save", err)
 			return
 		}
 		if err = tx.Commit(r.Context()); err != nil {
@@ -175,7 +177,7 @@ func (h *profileHandler) item(w http.ResponseWriter, r *http.Request) {
 		defer tx.Rollback(r.Context())
 		tag, err := tx.Exec(r.Context(), `UPDATE profiles SET name=$1,target_role=$2,profile_data=$3::jsonb,full_name=$4,email=$5,phone=$6,location=$7,headline=$8,summary=$9,updated_at=now() WHERE id=$10 AND user_id=$11`, p.Name, p.TargetRole, string(p.Data), personal(p.Data, "name"), personal(p.Data, "email"), personal(p.Data, "phone"), personal(p.Data, "location"), personal(p.Data, "headline"), p.Summary, id, uid)
 		if err != nil {
-			writeError(w, 400, "Unable to update profile.")
+			writeProfilePersistenceError(w, "update", err)
 			return
 		}
 		if tag.RowsAffected() == 0 {
@@ -183,7 +185,7 @@ func (h *profileHandler) item(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err = h.syncRelational(r.Context(), tx, id, p.Data); err != nil {
-			writeError(w, 400, "Unable to update profile.")
+			writeProfilePersistenceError(w, "update", err)
 			return
 		}
 		if err = tx.Commit(r.Context()); err != nil {
@@ -439,6 +441,30 @@ func validProfile(p profileRecord) bool {
 		return false
 	}
 	return validateProfileEntries(p.Data) == nil
+}
+
+// writeProfilePersistenceError gives clients a safe, actionable reason for common
+// profile persistence failures without returning SQL, schema, or user data.
+func writeProfilePersistenceError(w http.ResponseWriter, action string, err error) {
+	message := "The profile could not be " + action + "d because the database rejected one of its values. Check dates, duplicate skills or languages, and search settings, then try again."
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			message = "The profile could not be " + action + "d because it contains a duplicate value. Remove duplicate skills, languages, job titles, or technologies and try again."
+		case "23514":
+			message = "The profile could not be " + action + "d because one or more values are outside the allowed options. Check proficiency, work mode, salary, and date ranges."
+		case "22P02", "22007", "22008":
+			message = "The profile could not be " + action + "d because a date, number, or identifier has an invalid format. Review the entered values and try again."
+		case "23502":
+			message = "The profile could not be " + action + "d because a required value is missing. Check the highlighted profile fields and try again."
+		case "23503":
+			message = "The profile could not be " + action + "d because a related profile entry is invalid. Reload the page and try again."
+		case "40001", "40P01":
+			message = "The profile could not be " + action + "d because the database had a temporary conflict. Please try again."
+		}
+	}
+	writeError(w, http.StatusBadRequest, message)
 }
 
 func decodeSearchInteger(raw json.RawMessage) (int, error) {
