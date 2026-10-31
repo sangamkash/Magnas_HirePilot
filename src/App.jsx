@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, ChevronDown, CircleHelp, FileUser, LayoutDashboard, Plus, Search, Settings2, Sparkles, Trash2, UserRound, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, ChevronDown, CircleHelp, FileUser, LayoutDashboard, Plus, Search, Settings2, Sparkles, Trash2, UserRound, X, Pencil, Target } from 'lucide-react'
 
 const STORAGE_KEY = 'magnas-hirepilot-v1'
+const profilesStorageKey = user => `${STORAGE_KEY}:profiles:${encodeURIComponent(user)}`
+const activeStorageKey = user => `${STORAGE_KEY}:active:${encodeURIComponent(user)}`
 const freshProfile = () => ({
   personal: { name: '', email: '', phone: '', location: '', headline: '', summary: '' },
   skills: { programming: [], technologies: [], tools: [] }, education: [], experience: [], languages: [], certificates: [], awards: [],
@@ -9,6 +11,22 @@ const freshProfile = () => ({
 })
 const starter = { ...freshProfile(), personal: { name: 'Sangam', email: '', phone: '', location: 'Bengaluru, India', headline: 'Software Engineer', summary: '' }, skills: { programming: ['Go', 'TypeScript'], technologies: ['PostgreSQL', 'Redis'], tools: ['Docker', 'Git'] } }
 const loadData = () => { try { return { ...freshProfile(), ...(JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}) } } catch { return starter } }
+const loadProfiles = user => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(profilesStorageKey(user)))
+    if (Array.isArray(stored)) return stored
+    const legacyOwner = localStorage.getItem(`${STORAGE_KEY}:owner`)
+    const legacy = legacyOwner && legacyOwner !== user ? null : JSON.parse(localStorage.getItem(STORAGE_KEY))
+    if (legacy && (legacy.personal?.name || legacy.searches?.length || legacy.education?.length || legacy.experience?.length)) {
+      const migrated = [{ id: id(), name: legacy.personal?.headline || legacy.personal?.name || 'My profile', ...legacy }]
+      localStorage.setItem(profilesStorageKey(user), JSON.stringify(migrated))
+      localStorage.setItem(activeStorageKey(user), migrated[0].id)
+      localStorage.setItem(`${STORAGE_KEY}:owner`, user)
+      return migrated
+    }
+  } catch { /* Start with an empty profile list when local data is malformed. */ }
+  return []
+}
 const id = () => crypto.randomUUID()
 const blankSearch = () => ({ id: id(), name: '', titles: [''], technologies: '', region: '', workMode: [], salary: '', currency: 'INR', period: 'month', hours: 0, days: 0, months: 0 })
 
@@ -20,32 +38,60 @@ function useRoute() {
 }
 
 function App() {
-  const [profile, setProfile] = useState(loadData)
+  const [profiles, setProfiles] = useState([])
+  const [activeId, setActiveId] = useState('')
+  const [profile, setProfile] = useState(freshProfile)
   const [path, go] = useRoute()
   const [auth, setAuth] = useState({ loading: true, user: null })
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   useEffect(() => { fetch('/api/v1/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).then(user => setAuth({ loading: false, user })).catch(() => setAuth({ loading: false, user: null })) }, [])
-  useEffect(() => { if (!auth.loading && !auth.user && !['/login', '/register'].includes(path)) go(`/login?next=${encodeURIComponent(path + location.search)}`); if (!auth.loading && auth.user && ['/login', '/register'].includes(path)) go('/') }, [auth.loading, auth.user, path])
+  useEffect(() => { if (!auth.loading && !auth.user && !['/login', '/register'].includes(path)) go(`/login?next=${encodeURIComponent(path + location.search)}`); if (!auth.loading && auth.user && ['/login', '/register'].includes(path)) go('/profiles') }, [auth.loading, auth.user, path])
   const [saved, setSaved] = useState(false)
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(profile)); setSaved(true); const t = setTimeout(() => setSaved(false), 1600); return () => clearTimeout(t) }, [profile])
+  useEffect(() => {
+    if (!auth.user || auth.loading) return
+    const userProfiles = loadProfiles(auth.user.username)
+    const storedActive = localStorage.getItem(activeStorageKey(auth.user.username))
+    const chosen = userProfiles.find(p => p.id === storedActive) || userProfiles[0]
+    setProfiles(userProfiles)
+    setActiveId(chosen?.id || '')
+    setProfile(chosen || freshProfile())
+  }, [auth.user?.username, auth.loading])
+  useEffect(() => {
+    if (!auth.user || auth.loading) return
+    localStorage.setItem(profilesStorageKey(auth.user.username), JSON.stringify(profiles))
+    localStorage.setItem(activeStorageKey(auth.user.username), activeId)
+  }, [profiles, activeId, auth.user?.username, auth.loading])
+  useEffect(() => { if (!auth.user || !activeId || path.startsWith('/profiles/') || !profiles.some(p => p.id === activeId)) return; setProfiles(items => items.map(item => item.id === activeId ? { ...item, ...profile } : item)) }, [profile, activeId, auth.user?.username, path])
+  useEffect(() => { setSaved(true); const t = setTimeout(() => setSaved(false), 1600); return () => clearTimeout(t) }, [profile])
   const route = path.split('/').filter(Boolean)
   if (auth.loading) return <AuthShell><p className="auth-loading">Loading your account…</p></AuthShell>
   if (!auth.user && !['/login', '/register'].includes(path)) return null
   if (auth.user && ['/login', '/register'].includes(path)) return null
-  if (!auth.user) return <AuthPage mode={path === '/register' ? 'register' : 'login'} busy={authBusy} error={authError} onSubmit={async (username, password) => { setAuthBusy(true); setAuthError(''); try { const response = await fetch(`/api/v1/auth/${path === '/register' ? 'register' : 'login'}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Unable to authenticate.'); setAuth({ loading: false, user: data }); go(new URLSearchParams(location.search).get('next') || '/') } catch (error) { setAuthError(error.message) } finally { setAuthBusy(false) } }} go={go}/>
+  if (!auth.user) return <AuthPage mode={path === '/register' ? 'register' : 'login'} busy={authBusy} error={authError} onSubmit={async (username, password) => { setAuthBusy(true); setAuthError(''); try { const response = await fetch(`/api/v1/auth/${path === '/register' ? 'register' : 'login'}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Unable to authenticate.'); setAuth({ loading: false, user: data }); go(new URLSearchParams(location.search).get('next') || '/profiles') } catch (error) { setAuthError(error.message) } finally { setAuthBusy(false) } }} go={go}/>
   const activeSearch = route[0] === 'search' ? profile.searches.find(s => s.id === route[1]) : null
-  const nav = [{ label: 'Profile', path: '/', icon: UserRound }, { label: 'Job dashboard', path: '/jobs', icon: LayoutDashboard }]
+  const editorRoute = path === '/profiles/create' || /^\/profiles\/[^/]+\/edit$/.test(path)
+  const nav = [{ label: 'Dashboard', path: '/jobs', icon: LayoutDashboard }, { label: 'My Profiles', path: '/profiles', icon: UserRound }, { label: 'Discover', path: '/discover', icon: Search }, { label: 'Match', path: '/match', icon: Target }]
+  const commitProfile = savedProfile => {
+    const exists = profiles.some(p => p.id === savedProfile.id)
+    if (!exists && profiles.length >= 10) { go('/profiles'); return }
+    const next = exists ? profiles.map(p => p.id === savedProfile.id ? savedProfile : p) : [...profiles, savedProfile]
+    setProfiles(next)
+    setProfile(savedProfile)
+    if (!activeId) { setActiveId(savedProfile.id); setProfile(savedProfile) }
+    go('/profiles')
+  }
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="/" onClick={e => { e.preventDefault(); go('/') }}><span className="brand-mark"><Sparkles size={17}/></span><span>magnas<span className="brand-light">hire</span></span></a>
       <div className="workspace"><div className="workspace-avatar">M</div><div><strong>Magnas Hiring Pilot</strong><small>Personal workspace</small></div><ChevronDown size={15}/></div>
       <p className="nav-label">WORKSPACE</p>
-      <nav>{nav.map(({ label, path: target, icon: Icon }) => <button key={label} className={`nav-item ${(path === target || (target === '/' && path.startsWith('/search'))) ? 'active' : ''}`} onClick={() => go(target)}><Icon size={17}/>{label}</button>)}</nav>
+      <nav>{nav.map(({ label, path: target, icon: Icon }) => <button key={label} className={`nav-item ${(path === target || (target === '/profiles' && (path === '/profiles' || editorRoute)) || (target === '/discover' && (path.startsWith('/search') || path === '/discover')) || (target === '/match' && path === '/match')) ? 'active' : ''}`} onClick={() => go(target)}><Icon size={17}/>{label}</button>)}</nav>
+      <div className="active-profile-side"><span>ACTIVE PROFILE</span><strong>{profiles.find(p=>p.id===activeId)?.name || profiles.find(p=>p.id===activeId)?.personal?.headline || profiles.find(p=>p.id===activeId)?.personal?.name || 'None selected'}</strong></div>
       <div className="sidebar-bottom"><div className="help-card"><CircleHelp size={18}/><strong>Need a hand?</strong><p>Find answers and tips to get the most out of Magnus.</p><button>Visit help center <ArrowRight size={14}/></button></div><div className="user-card"><div className="profile-avatar">{auth.user.username.slice(0, 1).toUpperCase()}</div><span><strong>{auth.user.username}</strong><small>Signed in</small></span><button className="logout-button" onClick={async () => { await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }); setAuth({ loading: false, user: null }); go('/login') }}>Log out</button></div></div>
     </aside>
-    <main className="main-area"><header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{path.startsWith('/search') ? (activeSearch?.name || 'New search') : path === '/jobs' ? 'Job dashboard' : 'Profile'}</strong></div><div className="top-actions"><button className="icon-button" aria-label="Help"><CircleHelp size={18}/></button><button className="icon-button notification" aria-label="Notifications"><Bell size={18}/></button><div className="profile-avatar small">{(profile.personal.name || 'S').slice(0, 1).toUpperCase()}</div></div></header>
-      {path === '/jobs' ? <Dashboard searches={profile.searches} go={go}/> : route[0] === 'search' ? <SearchEditor search={activeSearch || blankSearch()} isNew={!activeSearch} onSave={(s, isNew) => { setProfile(p => ({ ...p, searches: isNew ? [...p.searches, s] : p.searches.map(old => old.id === s.id ? s : old) })); go('/') }} onCancel={() => go('/')}/> : <ProfilePage profile={profile} setProfile={setProfile} go={go} saved={saved}/>}
+    <main className="main-area"><header className="topbar"><div className="breadcrumb">Workspace <span>/</span> <strong>{path.startsWith('/search') ? (activeSearch?.name || 'New search') : path === '/jobs' ? 'Dashboard' : path === '/profiles' ? 'My Profiles' : editorRoute ? 'Profile editor' : path.slice(1)}</strong></div><div className="top-actions"><button className="icon-button" aria-label="Help"><CircleHelp size={18}/></button><button className="icon-button notification" aria-label="Notifications"><Bell size={18}/></button><div className="profile-avatar small">{(profile.personal.name || auth.user.username || 'S').slice(0, 1).toUpperCase()}</div></div></header>
+      {path === '/jobs' ? <Dashboard searches={profile.searches} go={go}/> : path === '/profiles' ? <ProfilesPage profiles={profiles} activeId={activeId} onSelect={p=>{setActiveId(p.id);setProfile(p);localStorage.setItem(activeStorageKey(auth.user.username),p.id)}} go={go}/> : path === '/profiles/create' || /^\/profiles\/[^/]+\/edit$/.test(path) ? path.endsWith('/edit') && !profiles.some(p=>p.id===route[1]) ? <ProfilesPage profiles={profiles} activeId={activeId} onSelect={p=>{setActiveId(p.id);setProfile(p);localStorage.setItem(activeStorageKey(auth.user.username),p.id)}} go={go}/> : <ProfilePage key={`${path}:${route[1] || 'new'}`} profile={path.endsWith('/edit') ? profiles.find(p=>p.id===route[1]) : freshProfile()} go={go} saved={saved} editorTitle={path.endsWith('/edit') ? 'Edit Profile' : 'Create Profile'} profileId={path.endsWith('/edit') ? route[1] : null} onSave={commitProfile}/> : route[0] === 'search' ? <SearchEditor search={activeSearch || blankSearch()} isNew={!activeSearch} onSave={(s, isNew) => { setProfile(p => ({ ...p, searches: isNew ? [...p.searches, s] : p.searches.map(old => old.id === s.id ? s : old) })); go('/profiles') }} onCancel={() => go('/profiles')}/> : path === '/discover' || path === '/match' ? <Dashboard searches={profile.searches} go={go}/> : <ProfilesPage profiles={profiles} activeId={activeId} onSelect={p=>{setActiveId(p.id);setProfile(p);localStorage.setItem(activeStorageKey(auth.user.username),p.id)}} go={go}/>}
     </main>
   </div>
 }
@@ -58,7 +104,8 @@ function AddButton({ children, onClick, subtle = false }) { return <button type=
 function RemoveButton({ onClick, label = 'Remove entry' }) { return <button type="button" className="remove-button" onClick={onClick} aria-label={label}><Trash2 size={15}/><span>Remove</span></button> }
 function Empty({ title, description, action }) { return <div className="empty-state"><div className="empty-icon"><Sparkles size={21}/></div><strong>{title}</strong><p>{description}</p>{action}</div> }
 
-function ProfilePage({ profile, setProfile, go, saved }) {
+function ProfilePage({ profile: initialProfile, go, saved, editorTitle = 'Create Profile', profileId, onSave }) {
+  const [profile, setProfile] = useState(() => ({ ...freshProfile(), ...initialProfile, personal: { ...freshProfile().personal, ...(initialProfile?.personal || {}) } }))
   const patch = (key, value) => setProfile(p => ({ ...p, [key]: value }))
   const personal = profile.personal || freshProfile().personal
   const setPersonal = (key, value) => patch('personal', { ...personal, [key]: value })
@@ -70,7 +117,9 @@ function ProfilePage({ profile, setProfile, go, saved }) {
   const updateSkill = (category, value) => patch('skills', { ...skills, [category]: value.split(',').map(x => x.trim()).filter(Boolean) })
   const searchSummary = (s) => [s.titles?.filter(Boolean).join(', '), s.technologies, s.region, s.workMode?.join(', '), s.salary && `${s.currency || 'INR'} ${s.salary}/${s.period || 'month'}`, (s.hours || s.days || s.months) && `Posted ${[s.months && `${s.months} mo`, s.days && `${s.days} d`, s.hours && `${s.hours} h`].filter(Boolean).join(' ')}`].filter(Boolean)
   return <div className="page-wrap profile-page">
-    <PageTitle eyebrow="YOUR PROFESSIONAL IDENTITY" title="Your profile" description="A strong profile helps us find the right opportunities for you." right={<div className="save-indicator"><span className={saved ? 'saved-dot' : ''}></span>{saved ? 'Saved' : 'All changes saved'}</div>}/>
+    <button className="back-link" onClick={() => go('/profiles')}><ArrowLeft size={16}/> Back to My Profiles</button>
+    <PageTitle eyebrow="YOUR PROFESSIONAL IDENTITY" title={editorTitle} description="A strong profile helps us find the right opportunities for you." right={<div className="save-indicator"><span className={saved ? 'saved-dot' : ''}></span>{saved ? 'Saved' : 'All changes saved'}</div>}/>
+    <div className="form-grid profile-name-field"><Field label="Profile name" value={profile.name || ''} onChange={v=>patch('name',v)} placeholder="e.g. Backend Engineer" required/></div>
     <Section icon={UserRound} title="Personal information" description="The essentials that help employers get to know you."><div className="form-grid"><Field label="Full name" value={personal.name} onChange={v => setPersonal('name', v)} placeholder="e.g. Sangam Patel" required/><Field label="Email address" type="email" value={personal.email} onChange={v => setPersonal('email', v)} placeholder="you@example.com"/><Field label="Phone number" type="tel" value={personal.phone} onChange={v => setPersonal('phone', v)} placeholder="+91 98765 43210"/><Field label="Current location" value={personal.location} onChange={v => setPersonal('location', v)} placeholder="City, Country"/><div className="full-width"><Field label="Professional headline" value={personal.headline} onChange={v => setPersonal('headline', v)} placeholder="e.g. Senior Software Engineer"/></div><div className="full-width"><TextArea label="Professional summary" value={personal.summary} onChange={v => setPersonal('summary', v)} placeholder="Share a little about your experience, strengths, and what you're looking for." rows={4}/></div></div></Section>
     <Section icon={Sparkles} title="Skills" description="Keep your strongest skills organized by type."><div className="skills-grid">{[['programming','Programming languages'],['technologies','Technologies'],['tools','Tools']].map(([k,label])=><label className="field" key={k}><span>{label}</span><input value={(skills[k] || []).join(', ')} onChange={e => updateSkill(k,e.target.value)} placeholder="Add skills separated by commas"/><small>Separate each skill with a comma.</small><div className="skill-chips">{(skills[k] || []).map(s => <span key={s}>{s}<button type="button" aria-label={`Remove ${s}`} onClick={() => patch('skills',{...skills,[k]:skills[k].filter(x=>x!==s)})}><X size={12}/></button></span>)}</div></label>)}</div></Section>
     <Section icon={BriefcaseBusiness} title="Education" description="Add your degrees, courses, or other education." action={<AddButton onClick={() => addRow('education',{ institution:'', degree:'', field:'', startDate:'', endDate:'' })}>Add education</AddButton>}>
@@ -83,6 +132,29 @@ function ProfilePage({ profile, setProfile, go, saved }) {
     <RepeatSection title="Awards" icon={Sparkles} description="Recognize achievements that matter to your career." rows={fieldRows('awards')} add={() => addRow('awards',{name:'',organization:'',date:'',description:''})} update={(i,v)=>updateRow('awards',i,v)} remove={i=>removeRow('awards',i)} fields={[['name','Award name'],['organization','Issuing organization'],['date','Date received','month']]} descriptionField="Description"/>
     <Section icon={Search} title="Discover & Match" description="Create focused job searches that match different directions in your career." action={<AddButton onClick={() => go('/search/new')}>Add search</AddButton>}>
       {profile.searches.length ? <div className="search-list">{profile.searches.map(s=><article className="search-card" key={s.id}><button className="search-card-main" onClick={() => go(`/search/${s.id}`)}><span className="search-card-icon"><Search size={17}/></span><span className="search-card-copy"><strong>{s.name || 'Untitled search'}</strong><small>{searchSummary(s).join(' · ') || 'Add criteria to this search'}</small></span><span className="search-card-arrow"><ArrowRight size={16}/></span></button><button className="search-delete" aria-label={`Delete ${s.name || 'search'}`} onClick={() => { if (confirm(`Delete “${s.name || 'Untitled search'}”? This cannot be undone.`)) patch('searches',profile.searches.filter(x=>x.id!==s.id)) }}><Trash2 size={15}/></button></article>)}</div> : <Empty title="Set up your first job search" description="Build separate searches for the roles and locations you’re interested in." action={<AddButton subtle onClick={() => go('/search/new')}>Add Discover & Match</AddButton>}/>}</Section>
+    <div className="form-actions"><button type="button" className="secondary-button" onClick={()=>go('/profiles')}>Cancel</button><button type="button" className="primary-button" onClick={()=>onSave?.({ ...profile, id: profileId || profile.id || id(), name: profile.name || profile.personal?.headline || profile.personal?.name || 'My profile' })}>Save profile <ArrowRight size={16}/></button></div>
+  </div>
+}
+
+function ProfilesPage({ profiles, activeId, onSelect, go }) {
+  const atLimit = profiles.length >= 10
+  const createButton = <button className="primary-button" onClick={()=>go('/profiles/create')} disabled={atLimit}><Plus size={16}/> Create New Profile</button>
+  return <div className="page-wrap profiles-page">
+    <PageTitle eyebrow="YOUR PROFESSIONAL IDENTITY" title="My Profiles" description="Manage the professional profiles you use for different career goals." right={profiles.length > 0 && createButton}/>
+    {atLimit && <div className="limit-message" role="status">You have reached the maximum limit of 10 profiles.</div>}
+    {!profiles.length ? <div className="profiles-empty"><div className="empty-icon"><UserRound size={22}/></div><h2>No professional profiles yet.</h2><p>Create your first profile to get started with job discovery and matching.</p><button className="primary-button" onClick={()=>go('/profiles/create')}><Plus size={16}/> Create Your First Profile</button></div> : <div className="profile-grid">{profiles.map(p=>{
+      const active = p.id === activeId
+      const title = p.personal?.headline || p.name || 'Professional profile'
+      const summary = p.personal?.summary || 'Add a professional summary to highlight your experience and career goals.'
+      const skillList = [...(p.skills?.programming || []), ...(p.skills?.technologies || []), ...(p.skills?.tools || [])]
+      return <article className={`profile-card ${active?'is-active':''}`} key={p.id}>
+        <div className="profile-card-top"><div className="profile-card-icon"><UserRound size={19}/></div>{active && <span className="active-badge"><Check size={13}/> Active</span>}</div>
+        <h2>{p.name || p.personal?.name || 'Untitled profile'}</h2><strong className="profile-card-title">{title}</strong><p className="profile-card-summary">{summary}</p>
+        <div className="profile-facts">{p.personal?.location && <span>{p.personal.location}</span>}<span>{(p.experience || []).length} experience</span><span>{skillList.length} skills</span></div>
+        {skillList.length > 0 && <div className="profile-tags">{skillList.slice(0,4).map(skill=><span key={skill}>{skill}</span>)}</div>}
+        <div className="profile-card-actions"><button className="secondary-button" onClick={()=>go(`/profiles/${p.id}/edit`)}><Pencil size={14}/> Edit</button><button className={active?'secondary-button selected-profile':'primary-button'} disabled={active} onClick={()=>onSelect(p)}>{active?<><Check size={14}/> Active Profile</>:'Select Profile'}</button></div>
+      </article>
+    })}</div>}
   </div>
 }
 
