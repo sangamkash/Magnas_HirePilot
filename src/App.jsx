@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, ChevronDown, CircleHelp, FileUser, LayoutDashboard, Plus, Search, Settings2, Sparkles, Trash2, UserRound, X, Pencil, Target } from 'lucide-react'
 import { importLegacyProfiles } from './profileImport'
+import { fromISODate, normalizeProfileDates, toISODate } from './profileDates'
 
 const STORAGE_KEY = 'magnas-hirepilot-v1'
 const legacyKey = value => {
@@ -40,7 +41,7 @@ const saveLegacyProfiles = profiles => {
     }
   } catch { /* Retain the original browser copy if storage is unavailable. */ }
 }
-const toPayload = p => ({ name: p.name || p.personal?.headline || p.personal?.name || 'My profile', data: p, ...(p.legacyImportId ? { legacy_import_id: p.legacyImportId } : {}) })
+const toPayload = p => ({ name: p.name || p.personal?.headline || p.personal?.name || 'My profile', data: normalizeProfileDates(p), ...(p.legacyImportId ? { legacy_import_id: p.legacyImportId } : {}) })
 const fromPayload = p => ({ ...p.data, id: p.id, name: p.name })
 const api = async (url, options = {}) => {
   const response = await fetch(url, { credentials: 'include', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } })
@@ -148,8 +149,6 @@ function App() {
 function PageTitle({ eyebrow, title, description, right }) { return <div className="page-title"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{right}</div> }
 function Section({ icon: Icon, title, description, children, action, className = '' }) { return <section className={`section-card ${className}`}><div className="section-heading"><div className="section-icon"><Icon size={17}/></div><div className="section-heading-copy"><h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</div><div className="section-content">{children}</div></section> }
 function Field({ label, value, onChange, placeholder = '', type = 'text', required = false, hint, ...props }) { const profileDate = type === 'month'; const dateValue = profileDate ? toISODate(value) : ''; return <label className="field"><span>{label}{required && <i> *</i>}</span>{profileDate ? <span className="date-input-controls"><input type="text" inputMode="numeric" value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder="dd/mm/yyyy" aria-label={`${label} (dd/mm/yyyy)`} {...props}/><input className="date-picker" type="date" value={dateValue} aria-label={`Choose ${label}`} onChange={e => onChange(fromISODate(e.target.value))}/></span> : <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} required={required} {...props}/ >}{hint && <small>{hint}</small>}</label> }
-function toISODate(value) { if (!value) return ''; const parts = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (parts) return `${parts[3]}-${parts[2]}-${parts[1]}`; const month = value.match(/^(\d{4})-(\d{2})$/); return month ? `${month[1]}-${month[2]}-01` : /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '' }
-function fromISODate(value) { if (!value) return ''; const [year, month, day] = value.split('-'); return `${day}/${month}/${year}` }
 function TextArea({ label, value, onChange, placeholder, rows = 4 }) { return <label className="field"><span>{label}</span><textarea rows={rows} value={value || ''} onChange={e => onChange(e.target.value)} placeholder={placeholder}/></label> }
 function AddButton({ children, onClick, subtle = false }) { return <button type="button" className={`add-button ${subtle ? 'subtle' : ''}`} onClick={onClick}><Plus size={15}/>{children}</button> }
 function RemoveButton({ onClick, label = 'Remove entry' }) { return <button type="button" className="remove-button" onClick={onClick} aria-label={label}><Trash2 size={15}/><span>Remove</span></button> }
