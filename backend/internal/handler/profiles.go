@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -56,7 +58,7 @@ func (h *profileHandler) collection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !validProfile(p) {
-			writeError(w, 400, "Profile name and personal full name are required; profile data must be a JSON object.")
+			writeError(w, 400, profileValidationMessage(p))
 			return
 		}
 		p.LegacyImportID = strings.TrimSpace(p.LegacyImportID)
@@ -164,7 +166,7 @@ func (h *profileHandler) item(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !validProfile(p) {
-			writeError(w, 400, "Profile name and personal full name are required; profile data must be a JSON object.")
+			writeError(w, 400, profileValidationMessage(p))
 			return
 		}
 		p.TargetRole = targetRole(p.Data)
@@ -263,6 +265,19 @@ func (h *profileHandler) syncRelational(ctx context.Context, tx pgx.Tx, id strin
 }
 
 func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx, id string, data json.RawMessage) error {
+	type experienceLink struct {
+		URL         string `json:"url"`
+		Description string `json:"description"`
+	}
+	// Older clients stored links as strings; newer clients send a URL and description.
+	var legacyLinkShape struct {
+		Experience []struct {
+			Links []json.RawMessage `json:"links"`
+		} `json:"experience"`
+	}
+	if err := json.Unmarshal(data, &legacyLinkShape); err != nil {
+		return err
+	}
 	var profile struct {
 		Skills struct {
 			Programming  []string `json:"programming"`
@@ -277,15 +292,14 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 			End         string `json:"endDate"`
 		} `json:"education"`
 		Experience []struct {
-			Company        string   `json:"company"`
-			Title          string   `json:"title"`
-			EmploymentType string   `json:"employmentType"`
-			Location       string   `json:"location"`
-			Start          string   `json:"startDate"`
-			End            string   `json:"endDate"`
-			Current        bool     `json:"current"`
-			Description    string   `json:"responsibilities"`
-			Links          []string `json:"links"`
+			Company        string `json:"company"`
+			Title          string `json:"title"`
+			EmploymentType string `json:"employmentType"`
+			Location       string `json:"location"`
+			Start          string `json:"startDate"`
+			End            string `json:"endDate"`
+			Current        bool   `json:"current"`
+			Description    string `json:"responsibilities"`
 		} `json:"experience"`
 		Languages []struct {
 			Name        string `json:"language"`
@@ -322,6 +336,24 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return err
 	}
+	if len(profile.Experience) != len(legacyLinkShape.Experience) {
+		return fmt.Errorf("invalid experience links")
+	}
+	linksByExperience := make([][]experienceLink, len(profile.Experience))
+	for i, experience := range legacyLinkShape.Experience {
+		for _, raw := range experience.Links {
+			var link experienceLink
+			if err := json.Unmarshal(raw, &link); err == nil && link.URL != "" {
+				linksByExperience[i] = append(linksByExperience[i], link)
+				continue
+			}
+			var url string
+			if err := json.Unmarshal(raw, &url); err != nil {
+				return fmt.Errorf("invalid experience link")
+			}
+			linksByExperience[i] = append(linksByExperience[i], experienceLink{URL: url})
+		}
+	}
 	for category, values := range map[string][]string{"programming": profile.Skills.Programming, "technology": profile.Skills.Technologies, "tool": profile.Skills.Tools} {
 		for _, value := range values {
 			if strings.TrimSpace(value) == "" {
@@ -340,7 +372,7 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 			return err
 		}
 	}
-	for _, v := range profile.Experience {
+	for experienceIndex, v := range profile.Experience {
 		if strings.TrimSpace(v.Company) == "" || strings.TrimSpace(v.Title) == "" {
 			continue
 		}
@@ -348,12 +380,13 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 		if err := tx.QueryRow(ctx, `INSERT INTO work_experience(profile_id,company,title,employment_type,location,start_date,end_date,is_current,responsibilities) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,'')::date,NULLIF($7,'')::date,$8,NULLIF($9,'')) RETURNING id::text`, id, v.Company, v.Title, v.EmploymentType, v.Location, normalizeProfileDate(v.Start), normalizeProfileDate(v.End), v.Current, v.Description).Scan(&experienceID); err != nil {
 			return err
 		}
-		for position, link := range v.Links {
-			link = strings.TrimSpace(link)
-			if link == "" {
+		for position, link := range linksByExperience[experienceIndex] {
+			link.URL = strings.TrimSpace(link.URL)
+			link.Description = strings.TrimSpace(link.Description)
+			if link.URL == "" {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO work_experience_links(work_experience_id,url,position) VALUES($1,$2,$3)`, experienceID, link, position); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO work_experience_links(work_experience_id,url,description,position) VALUES($1,$2,NULLIF($3,''),$4)`, experienceID, link.URL, link.Description, position); err != nil {
 				return err
 			}
 		}
@@ -454,6 +487,16 @@ func validProfile(p profileRecord) bool {
 	return validateProfileEntries(p.Data) == nil
 }
 
+func profileValidationMessage(p profileRecord) string {
+	if strings.TrimSpace(p.Name) == "" || len(p.Data) == 0 || strings.TrimSpace(personal(p.Data, "name")) == "" {
+		return "Profile name and personal full name are required; profile data must be a JSON object."
+	}
+	if err := validateProfileEntries(p.Data); err != nil {
+		return "Profile contains an invalid or duplicate value. Check dates, skills, languages, proficiency, work mode, and salary settings."
+	}
+	return "Profile data must be a JSON object."
+}
+
 // writeProfilePersistenceError gives clients a safe, actionable reason for common
 // profile persistence failures without returning SQL, schema, or user data.
 func writeProfilePersistenceError(w http.ResponseWriter, action string, err error) {
@@ -511,12 +554,8 @@ func validateProfileEntries(data json.RawMessage) error {
 			Technologies []string `json:"technologies"`
 			Tools        []string `json:"tools"`
 		} `json:"skills"`
-		Education    []json.RawMessage `json:"education"`
-		Experience   []json.RawMessage `json:"experience"`
-		Languages    []json.RawMessage `json:"languages"`
-		Certificates []json.RawMessage `json:"certificates"`
-		Awards       []json.RawMessage `json:"awards"`
-		Searches     []struct {
+		Searches []struct {
+			Name         string          `json:"name"`
 			Titles       []string        `json:"titles"`
 			WorkMode     []string        `json:"workMode"`
 			Technologies string          `json:"technologies"`
@@ -524,42 +563,177 @@ func validateProfileEntries(data json.RawMessage) error {
 			Hours        json.RawMessage `json:"hours"`
 			Days         json.RawMessage `json:"days"`
 			Months       json.RawMessage `json:"months"`
+			Currency     string          `json:"currency"`
+			Period       string          `json:"period"`
 		} `json:"searches"`
+	}
+	// Decode the row collections separately so malformed field types fail validation
+	// before they reach PostgreSQL casts or constraints.
+	var raw struct {
+		Education []struct {
+			Institution string `json:"institution"`
+			Start       string `json:"startDate"`
+			End         string `json:"endDate"`
+		} `json:"education"`
+		Experience []struct {
+			Company string `json:"company"`
+			Title   string `json:"title"`
+			Start   string `json:"startDate"`
+			End     string `json:"endDate"`
+			Current bool   `json:"current"`
+		} `json:"experience"`
+		Languages []struct {
+			Name        string `json:"language"`
+			Proficiency string `json:"proficiency"`
+		} `json:"languages"`
+		Certificates []struct {
+			Name       string `json:"name"`
+			Issue      string `json:"issueDate"`
+			Expiration string `json:"expirationDate"`
+		} `json:"certificates"`
+		Awards []struct {
+			Name string `json:"name"`
+			Date string `json:"date"`
+		} `json:"awards"`
 	}
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return err
 	}
-	for _, group := range []struct {
-		entries  []json.RawMessage
-		required []string
-	}{
-		{profile.Education, []string{"institution"}},
-		{profile.Experience, []string{"company", "title"}},
-		{profile.Languages, []string{"language"}},
-		{profile.Certificates, []string{"name"}},
-		{profile.Awards, []string{"name"}},
-	} {
-		for _, raw := range group.entries {
-			var entry map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &entry); err != nil || entry == nil {
-				return fmt.Errorf("invalid nested profile entry")
-			}
-			for _, key := range group.required {
-				var value string
-				if json.Unmarshal(entry[key], &value) != nil || strings.TrimSpace(value) == "" {
-					return fmt.Errorf("nested profile entry is missing %s", key)
-				}
-			}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, entry := range raw.Education {
+		if strings.TrimSpace(entry.Institution) == "" || !validDateRange(entry.Start, entry.End) {
+			return fmt.Errorf("invalid education entry")
 		}
 	}
+	for _, entry := range raw.Experience {
+		if strings.TrimSpace(entry.Company) == "" || strings.TrimSpace(entry.Title) == "" || !validDateRange(entry.Start, entry.End) || (entry.Current && entry.End != "") {
+			return fmt.Errorf("invalid experience entry")
+		}
+	}
+	for _, entry := range raw.Certificates {
+		if strings.TrimSpace(entry.Name) == "" || !validDateRange(entry.Issue, entry.Expiration) {
+			return fmt.Errorf("invalid certificate entry")
+		}
+	}
+	for _, entry := range raw.Awards {
+		if !validDate(entry.Date) {
+			return fmt.Errorf("invalid award date")
+		}
+	}
+	for _, entry := range raw.Languages {
+		if strings.TrimSpace(entry.Name) == "" || !oneOf(entry.Proficiency, "Beginner", "Elementary", "Intermediate", "Upper-intermediate", "Advanced", "Fluent", "Native", "Bilingual") {
+			return fmt.Errorf("invalid language entry")
+		}
+	}
+	if hasDuplicates(profile.Skills.Programming) || hasDuplicates(profile.Skills.Technologies) || hasDuplicates(profile.Skills.Tools) {
+		return fmt.Errorf("duplicate skill")
+	}
+	if duplicateFolded(raw.Languages, func(v struct {
+		Name        string `json:"language"`
+		Proficiency string `json:"proficiency"`
+	}) string {
+		return v.Name
+	}) {
+		return fmt.Errorf("duplicate language")
+	}
 	for _, search := range profile.Searches {
+		if strings.TrimSpace(search.Name) == "" || hasDuplicates(search.Titles) || hasDuplicates(splitValues(search.Technologies)) || hasDuplicates(search.WorkMode) {
+			return fmt.Errorf("invalid or duplicate search values")
+		}
+		for _, mode := range search.WorkMode {
+			if !oneOf(mode, "Remote", "Hybrid", "On-site") {
+				return fmt.Errorf("invalid work mode")
+			}
+		}
 		for _, raw := range []json.RawMessage{search.Hours, search.Days, search.Months} {
 			if _, err := decodeSearchInteger(raw); err != nil {
 				return err
 			}
 		}
+		if len(search.Salary) > 0 && string(search.Salary) != "null" && string(search.Salary) != `""` {
+			var salary string
+			if json.Unmarshal(search.Salary, &salary) != nil {
+				salary = string(search.Salary)
+			}
+			amount, err := strconv.ParseFloat(strings.TrimSpace(salary), 64)
+			if err != nil || amount < 0 || !oneOf(search.Currency, "INR", "USD", "EUR", "GBP", "CAD", "AUD") || !oneOf(search.Period, "hour", "month", "year") {
+				return fmt.Errorf("invalid salary settings")
+			}
+		}
 	}
 	return nil
+}
+
+func validDate(value string) bool {
+	if value == "" {
+		return true
+	}
+	value = strings.TrimSpace(value)
+	if len(value) == 7 && value[4] == '-' {
+		if _, err := time.Parse("2006-01", value); err != nil {
+			return false
+		}
+		return true
+	}
+	_, err := time.Parse("2006-01-02", value)
+	return err == nil
+}
+func validDateRange(start, end string) bool {
+	if !validDate(start) || !validDate(end) {
+		return false
+	}
+	if start == "" || end == "" {
+		return true
+	}
+	return normalizeProfileDate(end) >= normalizeProfileDate(start)
+}
+func oneOf(value string, options ...string) bool {
+	for _, option := range options {
+		if value == option {
+			return true
+		}
+	}
+	return false
+}
+func hasDuplicates(values []string) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key == "" {
+			continue
+		}
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+	}
+	return false
+}
+func splitValues(value string) []string {
+	values := strings.Split(value, ",")
+	out := values[:0]
+	for _, item := range values {
+		if strings.TrimSpace(item) != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+func duplicateFolded[T any](values []T, key func(T) string) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		k := strings.ToLower(strings.TrimSpace(key(value)))
+		if k == "" {
+			continue
+		}
+		if seen[k] {
+			return true
+		}
+		seen[k] = true
+	}
+	return false
 }
 func personal(data json.RawMessage, key string) string {
 	var x struct {
