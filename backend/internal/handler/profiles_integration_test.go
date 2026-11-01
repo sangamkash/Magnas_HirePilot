@@ -69,7 +69,7 @@ func TestProfileImportRetryIsIdempotentPostgres17(t *testing.T) {
 			"personal":     map[string]string{"name": "Test Import", "headline": "Backend Engineer"},
 			"skills":       map[string][]string{"programming": {"Go"}, "technologies": {"PostgreSQL"}, "tools": {"Docker"}},
 			"education":    []map[string]string{{"institution": "Example University", "degree": "BSc", "field": "CS", "startDate": "2010-01", "endDate": "2014-01"}},
-			"experience":   []map[string]any{{"company": "Example Co", "title": "Engineer", "employmentType": "Full-time", "startDate": "2018-01", "current": true, "responsibilities": "Built systems"}},
+			"experience":   []map[string]any{{"company": "Example Co", "title": "Engineer", "employmentType": "Full-time", "startDate": "2018-01", "current": true, "responsibilities": "Built systems", "links": []string{"https://example.com/project", "https://github.com/example"}}},
 			"languages":    []map[string]string{{"language": "English", "proficiency": "Fluent"}},
 			"certificates": []map[string]string{{"name": "Cloud Cert", "organization": "Example", "issueDate": "2020-01", "url": "https://example.invalid/cert"}},
 			"awards":       []map[string]string{{"name": "Engineering Award", "organization": "Example", "date": "2021-01", "description": "Recognition"}},
@@ -125,6 +125,14 @@ func TestProfileImportRetryIsIdempotentPostgres17(t *testing.T) {
 	}
 	if responsibilities != "Built systems" || searchTechnology != "Go, PostgreSQL" {
 		t.Fatalf("relational field mappings mismatch: responsibilities=%q technologies=%q", responsibilities, searchTechnology)
+	}
+	var experienceLinkCount int
+	var orderedLinks string
+	if err := db.QueryRow(ctx, `SELECT count(*), string_agg(url, ', ' ORDER BY position, id) FROM work_experience_links l JOIN work_experience e ON e.id=l.work_experience_id WHERE e.profile_id=$1`, firstProfile.ID).Scan(&experienceLinkCount, &orderedLinks); err != nil {
+		t.Fatal(err)
+	}
+	if experienceLinkCount != 2 || orderedLinks != "https://example.com/project, https://github.com/example" {
+		t.Fatalf("experience links mismatch: count=%d links=%q", experienceLinkCount, orderedLinks)
 	}
 }
 

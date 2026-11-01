@@ -277,14 +277,15 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 			End         string `json:"endDate"`
 		} `json:"education"`
 		Experience []struct {
-			Company        string `json:"company"`
-			Title          string `json:"title"`
-			EmploymentType string `json:"employmentType"`
-			Location       string `json:"location"`
-			Start          string `json:"startDate"`
-			End            string `json:"endDate"`
-			Current        bool   `json:"current"`
-			Description    string `json:"responsibilities"`
+			Company        string   `json:"company"`
+			Title          string   `json:"title"`
+			EmploymentType string   `json:"employmentType"`
+			Location       string   `json:"location"`
+			Start          string   `json:"startDate"`
+			End            string   `json:"endDate"`
+			Current        bool     `json:"current"`
+			Description    string   `json:"responsibilities"`
+			Links          []string `json:"links"`
 		} `json:"experience"`
 		Languages []struct {
 			Name        string `json:"language"`
@@ -343,8 +344,18 @@ func (h *profileHandler) writeRelationalChildren(ctx context.Context, tx pgx.Tx,
 		if strings.TrimSpace(v.Company) == "" || strings.TrimSpace(v.Title) == "" {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO work_experience(profile_id,company,title,employment_type,location,start_date,end_date,is_current,responsibilities) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,'')::date,NULLIF($7,'')::date,$8,NULLIF($9,''))`, id, v.Company, v.Title, v.EmploymentType, v.Location, normalizeProfileDate(v.Start), normalizeProfileDate(v.End), v.Current, v.Description); err != nil {
+		var experienceID string
+		if err := tx.QueryRow(ctx, `INSERT INTO work_experience(profile_id,company,title,employment_type,location,start_date,end_date,is_current,responsibilities) VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),NULLIF($6,'')::date,NULLIF($7,'')::date,$8,NULLIF($9,'')) RETURNING id::text`, id, v.Company, v.Title, v.EmploymentType, v.Location, normalizeProfileDate(v.Start), normalizeProfileDate(v.End), v.Current, v.Description).Scan(&experienceID); err != nil {
 			return err
+		}
+		for position, link := range v.Links {
+			link = strings.TrimSpace(link)
+			if link == "" {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO work_experience_links(work_experience_id,url,position) VALUES($1,$2,$3)`, experienceID, link, position); err != nil {
+				return err
+			}
 		}
 	}
 	for _, v := range profile.Languages {
