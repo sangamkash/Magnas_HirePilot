@@ -1,0 +1,4 @@
+DROP TABLE job_matches;
+DROP TABLE job_match_runs;
+ALTER TABLE job_discovery_runs DROP CONSTRAINT job_discovery_runs_id_search_config_id_unique;
+ALTER TABLE search_configs DROP CONSTRAINT search_configs_id_profile_id_unique;

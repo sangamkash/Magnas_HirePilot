@@ -60,6 +60,12 @@ Profile management uses authenticated `GET/POST /api/v1/profiles`, `GET/PUT/DELE
 
 Migrations are kept in `backend/migrations` and are not run automatically by the application or Docker startup. Create an empty up/down pair with `make migrate-create name=add_candidate_notes`; edit the generated files before applying them. Files use `NNNNNN_name.up.sql` and `NNNNNN_name.down.sql`; versions run in ascending order and rollback in descending order. Normal SQL and its tracking update run in a transaction. For PostgreSQL statements that cannot run in a transaction, put `-- migrate:no-transaction` in the SQL file; the SQL then executes without an encompassing transaction and migration bookkeeping follows separately, so such migrations should be written to tolerate recovery after partial execution.
 
+## Matching foundations
+
+Migration `000008_job_matching` adds historical matching runs and per-job AI evaluations. It is created but is not applied automatically. Review the up/down SQL, then apply it manually with `make migrate-up` when ready.
+
+The backend now has provider-independent AI interfaces and HTTP adapters for Ollama, OpenAI, Google Gemini, and Anthropic. `AI_DEFAULT_PROVIDER` defaults to `ollama`; set the selected provider's `*_MODEL`, and enable/configure hosted providers with their API key through environment variables. Fallback is disabled by default and runs only when explicitly enabled. Provider selection and per-stage configuration are foundations only; matching is not yet executed by an API or worker. See `backend/.env.example` for supported settings. Prompts and structured response validation live in `backend/internal/ai`; provider requests include timeout and retry handling. No matching API, matching persistence workflow, or RabbitMQ worker is included in this milestone.
+
 To run the backend or migration commands directly on the host, install Go 1.25 or newer and set `DATABASE_URL` to a local PostgreSQL URL (or configure the supported `PG*` variables). Run `cd backend && go run ./cmd/api` to start the server, or `go run ./cmd/api migrate up`, `go run ./cmd/api migrate down`, `go run ./cmd/api migrate status`, and `go run ./cmd/api migrate create add_candidate_notes`. The server defaults to `:8080`; set `HTTP_ADDR` to change it. Set `MIGRATIONS_DIR` to override the default `migrations` directory.
 
 Run backend verification with:
@@ -73,4 +79,4 @@ Run these from `backend/`, or use `make test` from the root.
 
 ## Current scope
 
-The backend is a modular monolith with configuration, database pooling, HTTP handlers, and versioned PostgreSQL schema migrations. Profile, authentication, search configuration, job discovery, and job match APIs are future work. No job-provider integration or fake job data is included.
+The backend is a modular monolith with configuration, database pooling, HTTP handlers, and versioned PostgreSQL schema migrations. Profile and authentication APIs are implemented. Job discovery, matching, and application APIs/workers are future work. No job-provider integration or fake job data is included.

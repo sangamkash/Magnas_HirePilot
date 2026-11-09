@@ -128,7 +128,7 @@ func TestProfileImportRetryIsIdempotentPostgres17(t *testing.T) {
 	}
 	var experienceLinkCount int
 	var orderedLinks, orderedDescriptions string
-	if err := db.QueryRow(ctx, `SELECT count(*), string_agg(url, ', ' ORDER BY position, id), string_agg(description, ', ' ORDER BY position, id) FROM work_experience_links l JOIN work_experience e ON e.id=l.work_experience_id WHERE e.profile_id=$1`, firstProfile.ID).Scan(&experienceLinkCount, &orderedLinks, &orderedDescriptions); err != nil {
+	if err := db.QueryRow(ctx, `SELECT count(*), string_agg(url, ', ' ORDER BY l.position, l.id), string_agg(description, ', ' ORDER BY l.position, l.id) FROM work_experience_links l JOIN work_experience e ON e.id=l.work_experience_id WHERE e.profile_id=$1`, firstProfile.ID).Scan(&experienceLinkCount, &orderedLinks, &orderedDescriptions); err != nil {
 		t.Fatal(err)
 	}
 	if experienceLinkCount != 2 || orderedLinks != "https://example.com/project, https://github.com/example" || orderedDescriptions != "Project portfolio, Source code" {
