@@ -1,5 +1,11 @@
-DROP TRIGGER job_discovery_results_sync_found_count ON job_discovery_results;
-DROP FUNCTION sync_job_discovery_found_count();
+DROP TRIGGER job_discovery_results_immutable ON job_discovery_results;
+DROP TRIGGER job_discovery_results_increment_found_count ON job_discovery_results;
+DROP TRIGGER job_discovery_runs_protect_found_count ON job_discovery_runs;
+DROP TRIGGER job_discovery_results_set_source ON job_discovery_results;
+DROP FUNCTION prevent_job_discovery_result_mutation();
+DROP FUNCTION increment_job_discovery_found_count();
+DROP FUNCTION protect_job_discovery_found_count();
+DROP FUNCTION set_job_discovery_result_source();
 DROP TABLE job_discovery_results;
 DROP TABLE job_discovery_runs;
 DROP TABLE jobs;

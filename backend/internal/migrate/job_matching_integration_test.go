@@ -96,6 +96,10 @@ func TestJobMatchingMigrationPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectDBError(t, func() error {
+		_, e := db.Exec(ctx, `DELETE FROM job_discovery_runs WHERE id=$1`, discoveryID)
+		return e
+	})
+	expectDBError(t, func() error {
 		_, e := db.Exec(ctx, `INSERT INTO job_matches(match_run_id,job_id,discovery_run_id,match_score,recommendation,raw_ai_response) VALUES($1,$2,$3,20,'CONSIDER','{}')`, runID, jobID, discoveryID)
 		return e
 	})

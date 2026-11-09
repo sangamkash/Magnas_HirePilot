@@ -35,6 +35,7 @@ CREATE TABLE jobs (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (source_id, external_job_id),
+    UNIQUE (id, source_id),
     CHECK (salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min),
     CHECK (expires_at IS NULL OR posted_at IS NULL OR expires_at >= posted_at)
 );
@@ -59,6 +60,7 @@ CREATE TABLE job_discovery_runs (
     error_message text,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(metadata) = 'object'),
     created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, source_id),
     CHECK (completed_at IS NULL OR completed_at >= started_at),
     CHECK (jobs_new + jobs_updated <= jobs_found),
     CHECK ((status IN ('COMPLETED', 'FAILED')) = (completed_at IS NOT NULL))
@@ -69,27 +71,68 @@ CREATE INDEX job_discovery_runs_status_idx ON job_discovery_runs (status);
 
 CREATE TABLE job_discovery_results (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    discovery_run_id uuid NOT NULL REFERENCES job_discovery_runs(id) ON DELETE CASCADE,
-    job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE RESTRICT,
+    discovery_run_id uuid NOT NULL,
+    job_id uuid NOT NULL,
+    source_id uuid NOT NULL,
     discovered_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (discovery_run_id, job_id)
+    UNIQUE (discovery_run_id, job_id),
+    FOREIGN KEY (discovery_run_id, source_id) REFERENCES job_discovery_runs(id, source_id) ON DELETE CASCADE,
+    FOREIGN KEY (job_id, source_id) REFERENCES jobs(id, source_id) ON DELETE RESTRICT
 );
 CREATE INDEX job_discovery_results_job_id_idx ON job_discovery_results (job_id);
 CREATE INDEX job_discovery_results_discovered_at_idx ON job_discovery_results (discovered_at DESC);
+CREATE INDEX job_discovery_results_run_source_idx ON job_discovery_results (discovery_run_id, source_id);
+CREATE INDEX job_discovery_results_job_source_idx ON job_discovery_results (job_id, source_id);
 
--- Keep jobs_found equal to the number of jobs recorded for the run. This avoids
--- application-side counters drifting from the provenance rows.
-CREATE FUNCTION sync_job_discovery_found_count() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-    target_run_id uuid;
+-- Results inherit their source from the run; composite foreign keys ensure the
+-- job came from that same source.
+CREATE FUNCTION set_job_discovery_result_source() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    target_run_id := COALESCE(NEW.discovery_run_id, OLD.discovery_run_id);
-    UPDATE job_discovery_runs
-       SET jobs_found = (SELECT count(*)::integer FROM job_discovery_results WHERE discovery_run_id = target_run_id)
-     WHERE id = target_run_id;
+    SELECT source_id INTO NEW.source_id
+      FROM job_discovery_runs
+     WHERE id = NEW.discovery_run_id;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER job_discovery_results_set_source
+BEFORE INSERT ON job_discovery_results
+FOR EACH ROW EXECUTE FUNCTION set_job_discovery_result_source();
+
+-- jobs_found is an insert-only counter. Direct edits and result deletion are
+-- rejected so the counter cannot drift; increments serialize on the run row.
+CREATE FUNCTION protect_job_discovery_found_count() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'INSERT' AND NEW.jobs_found <> 0 THEN
+        RAISE EXCEPTION 'jobs_found is maintained by job_discovery_results';
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.jobs_found IS DISTINCT FROM OLD.jobs_found AND pg_trigger_depth() < 2 THEN
+        RAISE EXCEPTION 'jobs_found is maintained by job_discovery_results';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER job_discovery_runs_protect_found_count
+BEFORE INSERT OR UPDATE OF jobs_found ON job_discovery_runs
+FOR EACH ROW EXECUTE FUNCTION protect_job_discovery_found_count();
+
+CREATE FUNCTION increment_job_discovery_found_count() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE job_discovery_runs SET jobs_found = jobs_found + 1 WHERE id = NEW.discovery_run_id;
     RETURN NULL;
 END;
 $$;
-CREATE TRIGGER job_discovery_results_sync_found_count
-AFTER INSERT OR DELETE ON job_discovery_results
-FOR EACH ROW EXECUTE FUNCTION sync_job_discovery_found_count();
+CREATE TRIGGER job_discovery_results_increment_found_count
+AFTER INSERT ON job_discovery_results
+FOR EACH ROW EXECUTE FUNCTION increment_job_discovery_found_count();
+
+CREATE FUNCTION prevent_job_discovery_result_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'DELETE' AND pg_trigger_depth() >= 2 THEN
+		RETURN OLD;
+    END IF;
+	RAISE EXCEPTION 'job discovery result records are immutable' USING ERRCODE = '55000';
+END;
+$$;
+CREATE TRIGGER job_discovery_results_immutable
+BEFORE UPDATE OR DELETE ON job_discovery_results
+FOR EACH ROW EXECUTE FUNCTION prevent_job_discovery_result_mutation();

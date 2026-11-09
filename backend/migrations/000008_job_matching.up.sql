@@ -29,7 +29,7 @@ CREATE TABLE job_match_runs (
 ALTER TABLE job_match_runs ADD CONSTRAINT job_match_runs_id_discovery_run_id_unique UNIQUE (id, discovery_run_id);
 CREATE INDEX job_match_runs_profile_created_idx ON job_match_runs(profile_id, created_at DESC);
 CREATE INDEX job_match_runs_search_config_created_idx ON job_match_runs(search_config_id, created_at DESC);
-CREATE INDEX job_match_runs_discovery_run_idx ON job_match_runs(discovery_run_id) WHERE discovery_run_id IS NOT NULL;
+CREATE INDEX job_match_runs_discovery_run_idx ON job_match_runs(discovery_run_id);
 CREATE INDEX job_match_runs_status_idx ON job_match_runs(status);
 
 CREATE TABLE job_matches (
